@@ -3,13 +3,21 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "hardhat test",
+    "deploy": "hardhat run scripts/deploy.js",
+    "local-node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "save-local": "node scripts/save-local-deployment.js",
+    "mint-local": "hardhat run scripts/mint-local-tokens.js --network localhost",
+    "setup-local": "npm run local-node && npm run deploy:local && npm run save-local",
+    "client": "cd client && npm start"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
     "hardhat": "^2.24.0"
   },
