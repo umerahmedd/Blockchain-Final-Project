@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { ethers, BrowserProvider, Contract } from 'ethers';
+import { ethers } from 'ethers';
 import MyTokenABI from '../contracts/MyToken.json';
 import DAOTreasuryABI from '../contracts/DAOTreasury.json';
 import deploymentInfo from '../contracts/deployment.json';
@@ -8,12 +8,12 @@ import deploymentInfo from '../contracts/deployment.json';
 const LOCAL_CHAIN_ID = '0x7a69';     // Hex for 31337 (Hardhat's default chainId)
 
 interface BlockchainContextType {
-  provider: BrowserProvider | null;
-  signer: any | null;
+  provider: ethers.providers.Web3Provider | null;
+  signer: ethers.Signer | null;
   account: string | null;
   isConnected: boolean;
-  tokenContract: Contract | null;
-  treasuryContract: Contract | null;
+  tokenContract: ethers.Contract | null;
+  treasuryContract: ethers.Contract | null;
   tokenBalance: string;
   treasuryBalance: string;
   proposals: any[];
@@ -56,28 +56,33 @@ interface BlockchainProviderProps {
 }
 
 export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children }) => {
-  const [provider, setProvider] = useState<BrowserProvider | null>(null);
-  const [signer, setSigner] = useState<any | null>(null);
+  const [provider, setProvider] = useState<ethers.providers.Web3Provider | null>(null);
+  const [signer, setSigner] = useState<ethers.Signer | null>(null);
   const [account, setAccount] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
-  const [tokenContract, setTokenContract] = useState<Contract | null>(null);
-  const [treasuryContract, setTreasuryContract] = useState<Contract | null>(null);
+  const [tokenContract, setTokenContract] = useState<ethers.Contract | null>(null);
+  const [treasuryContract, setTreasuryContract] = useState<ethers.Contract | null>(null);
   const [tokenBalance, setTokenBalance] = useState<string>("0");
   const [treasuryBalance, setTreasuryBalance] = useState<string>("0");
   const [proposals, setProposals] = useState<any[]>([]);
   const [networkName, setNetworkName] = useState<string>("");
+  const [isFetching, setIsFetching] = useState<boolean>(false);
+  const [proposalFetchTimer, setProposalFetchTimer] = useState<NodeJS.Timeout | null>(null);
 
   const connectWallet = async () => {
     if (window.ethereum) {
       try {
+        console.log("Connecting wallet...");
         // Request account access
         await window.ethereum.request({ method: 'eth_requestAccounts' });
         
         // Get current network
         const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+        console.log("Current chainId:", chainId);
         
         // If not on local network, ask to switch
         if (chainId !== LOCAL_CHAIN_ID) {
+          console.log("Not on local network, attempting to switch...");
           try {
             // Try to switch to local network
             await window.ethereum.request({
@@ -85,6 +90,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
               params: [{ chainId: LOCAL_CHAIN_ID }],
             });
           } catch (switchError: any) {
+            console.log("Switch error:", switchError);
             // If local network is not added to MetaMask, add it
             if (switchError.code === 4902) {
               try {
@@ -115,21 +121,28 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
         }
         
         // Create provider and signer
-        const provider = new ethers.BrowserProvider(window.ethereum);
+        console.log("Creating provider and signer...");
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
         setProvider(provider);
         
         // Get network information
         const network = await provider.getNetwork();
+        console.log("Network:", network);
         setNetworkName(network.name === 'unknown' ? 'Local Network' : network.name);
         
-        const signer = await provider.getSigner();
+        const signer = provider.getSigner();
         setSigner(signer);
         
         const account = await signer.getAddress();
+        console.log("Connected account:", account);
         setAccount(account);
         setIsConnected(true);
         
         // Initialize contracts using deployment info
+        console.log("Initializing contracts...");
+        console.log("Token address:", deploymentInfo.tokenAddress);
+        console.log("Treasury address:", deploymentInfo.treasuryAddress);
+        
         const tokenContract = new ethers.Contract(
           deploymentInfo.tokenAddress,
           MyTokenABI.abi,
@@ -144,9 +157,16 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
         );
         setTreasuryContract(treasuryContract);
         
-        // Fetch balances
-        await fetchBalances(account, tokenContract, treasuryContract);
-        await fetchProposals();
+        // Fetch balances after contract initialization is confirmed
+        if (account && tokenContract && treasuryContract) {
+          console.log("Contract initialization completed, fetching balances...");
+          await fetchBalances(account, tokenContract, treasuryContract);
+          console.log("Balances fetched, now fetching proposals...");
+          // Slight delay to ensure contracts are fully initialized
+          setTimeout(() => {
+            fetchProposals();
+          }, 500);
+        }
       } catch (error) {
         console.error("Error connecting to wallet:", error);
       }
@@ -157,49 +177,186 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
 
   const fetchBalances = async (
     account: string, 
-    tokenContract: Contract, 
-    treasuryContract: Contract
+    tokenContract: ethers.Contract, 
+    treasuryContract: ethers.Contract
   ) => {
     try {
+      console.log("Fetching balance for account:", account);
       const balance = await tokenContract.balanceOf(account);
-      setTokenBalance(ethers.formatEther(balance));
+      console.log("Raw token balance:", balance.toString());
+      setTokenBalance(ethers.utils.formatEther(balance));
       
+      console.log("Fetching treasury balance");
       const treasuryBalance = await treasuryContract.getTreasuryBalance();
-      setTreasuryBalance(ethers.formatEther(treasuryBalance));
+      console.log("Raw treasury balance:", treasuryBalance.toString());
+      setTreasuryBalance(ethers.utils.formatEther(treasuryBalance));
     } catch (error) {
       console.error("Error fetching balances:", error);
     }
   };
 
-  const fetchProposals = async () => {
-    if (!treasuryContract) return;
+  // Effect for fetching proposals when treasury contract changes
+  useEffect(() => {
+    let mounted = true;
     
-    try {
-      const proposalCount = await treasuryContract.proposalCount();
-      const count = Number(proposalCount);
-      
-      const fetchedProposals = [];
-      for (let i = 1; i <= count; i++) {
-        const proposal = await treasuryContract.proposals(i);
-        fetchedProposals.push({
-          id: Number(proposal.id),
-          proposer: proposal.proposer,
-          description: proposal.description,
-          recipient: proposal.recipient,
-          amount: ethers.formatEther(proposal.amount),
-          startTime: Number(proposal.startTime),
-          endTime: Number(proposal.endTime),
-          forVotes: ethers.formatEther(proposal.forVotes),
-          againstVotes: ethers.formatEther(proposal.againstVotes),
-          executed: proposal.executed,
-          deleted: proposal.deleted
-        });
+    const initialFetch = async () => {
+      if (treasuryContract && !isFetching && mounted) {
+        try {
+          setIsFetching(true);
+          console.log("Initial fetch triggered by useEffect");
+          
+          const proposalCount = await treasuryContract.proposalCount();
+          console.log("Raw proposal count:", proposalCount);
+          const count = Number(proposalCount);
+          console.log("Total proposals (as number):", count);
+          
+          if (!mounted) return;
+          
+          const fetchedProposals = [];
+          for (let i = 1; i <= count; i++) {
+            if (!mounted) break;
+            console.log(`Fetching proposal ${i}...`);
+            try {
+              const proposal = await treasuryContract.proposals(i);
+              console.log(`Raw proposal ${i} data:`, proposal);
+              fetchedProposals.push({
+                id: Number(proposal.id),
+                proposer: proposal.proposer,
+                description: proposal.description,
+                recipient: proposal.recipient,
+                amount: ethers.utils.formatEther(proposal.amount),
+                startTime: Number(proposal.startTime),
+                endTime: Number(proposal.endTime),
+                forVotes: ethers.utils.formatEther(proposal.forVotes),
+                againstVotes: ethers.utils.formatEther(proposal.againstVotes),
+                executed: proposal.executed,
+                deleted: proposal.deleted
+              });
+              console.log(`Processed proposal ${i}:`, fetchedProposals[fetchedProposals.length - 1]);
+            } catch (proposalError) {
+              console.error(`Error fetching proposal ${i}:`, proposalError);
+            }
+          }
+          
+          if (!mounted) return;
+          
+          console.log("All fetched proposals:", fetchedProposals);
+          setProposals(fetchedProposals);
+        } catch (error) {
+          console.error("Error in fetchProposals within useEffect:", error);
+        } finally {
+          if (mounted) {
+            setIsFetching(false);
+          }
+        }
       }
-      
-      setProposals(fetchedProposals);
-    } catch (error) {
-      console.error("Error fetching proposals:", error);
+    };
+    
+    initialFetch();
+    
+    return () => {
+      mounted = false;
+    };
+  }, [treasuryContract]);
+
+  // Separate manual fetchProposals function that can be called from buttons, etc.
+  const fetchProposals = async () => {
+    if (!treasuryContract || isFetching) {
+      console.log("Manual fetch: Treasury contract is null or already fetching, skipping...");
+      return;
     }
+    
+    // Clear any existing timer
+    if (proposalFetchTimer) {
+      clearTimeout(proposalFetchTimer);
+    }
+    
+    // Use debounce to prevent multiple rapid calls
+    const newTimer = setTimeout(async () => {
+      try {
+        setIsFetching(true);
+        console.log("Starting manual fetch of proposals...");
+        console.log("Treasury contract address:", treasuryContract.address);
+        console.log("Current account:", account);
+        
+        try {
+          // Try to directly fetch proposal 1 as a test
+          console.log("Attempting to fetch proposal 1 directly...");
+          try {
+            const proposal1 = await treasuryContract.proposals(1);
+            console.log("Proposal 1 direct fetch result:", {
+              id: Number(proposal1.id),
+              proposer: proposal1.proposer,
+              description: proposal1.description,
+              recipient: proposal1.recipient,
+              amount: ethers.utils.formatEther(proposal1.amount),
+              startTime: Number(proposal1.startTime),
+              endTime: Number(proposal1.endTime),
+              forVotes: ethers.utils.formatEther(proposal1.forVotes),
+              againstVotes: ethers.utils.formatEther(proposal1.againstVotes),
+              executed: proposal1.executed,
+              deleted: proposal1.deleted
+            });
+          } catch (directFetchError) {
+            console.error("Error fetching proposal 1 directly:", directFetchError);
+          }
+          
+          // Get count of proposals
+          const proposalCount = await treasuryContract.proposalCount();
+          console.log("Raw proposal count:", proposalCount);
+          const count = Number(proposalCount);
+          console.log("Total proposals (as number):", count);
+          
+          // Check events as an alternative way to find proposals
+          console.log("Checking ProposalCreated events...");
+          try {
+            const filter = treasuryContract.filters.ProposalCreated();
+            const events = await treasuryContract.queryFilter(filter);
+            console.log(`Found ${events.length} ProposalCreated events:`, events);
+          } catch (eventsError) {
+            console.error("Error fetching events:", eventsError);
+          }
+          
+          const fetchedProposals = [];
+          for (let i = 1; i <= count; i++) {
+            console.log(`Fetching proposal ${i}...`);
+            try {
+              const proposal = await treasuryContract.proposals(i);
+              console.log(`Raw proposal ${i} data:`, proposal);
+              fetchedProposals.push({
+                id: Number(proposal.id),
+                proposer: proposal.proposer,
+                description: proposal.description,
+                recipient: proposal.recipient,
+                amount: ethers.utils.formatEther(proposal.amount),
+                startTime: Number(proposal.startTime),
+                endTime: Number(proposal.endTime),
+                forVotes: ethers.utils.formatEther(proposal.forVotes),
+                againstVotes: ethers.utils.formatEther(proposal.againstVotes),
+                executed: proposal.executed,
+                deleted: proposal.deleted
+              });
+              console.log(`Processed proposal ${i}:`, fetchedProposals[fetchedProposals.length - 1]);
+            } catch (proposalError) {
+              console.error(`Error fetching proposal ${i}:`, proposalError);
+              console.error(`Error details:`, proposalError);
+            }
+          }
+          
+          console.log("All fetched proposals:", fetchedProposals);
+          setProposals(fetchedProposals);
+        } catch (countError) {
+          console.error("Error getting proposal count:", countError);
+        }
+      } catch (error) {
+        console.error("Error in manual fetchProposals:", error);
+      } finally {
+        setIsFetching(false);
+        setProposalFetchTimer(null);
+      }
+    }, 300); // 300ms debounce period
+    
+    setProposalFetchTimer(newTimer);
   };
 
   const createProposal = async (description: string, recipient: string, amount: string) => {
@@ -209,7 +366,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
       const tx = await treasuryContract.createProposal(
         description, 
         recipient, 
-        ethers.parseEther(amount)
+        ethers.utils.parseEther(amount)
       );
       await tx.wait();
       await fetchProposals();
@@ -227,52 +384,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
       
       // Check if the current account is the proposer
       if (proposal && proposal.proposer.toLowerCase() === account.toLowerCase()) {
-        // Create a beautiful alert using a div overlay
-        const alertDiv = document.createElement('div');
-        alertDiv.style.position = 'fixed';
-        alertDiv.style.top = '0';
-        alertDiv.style.left = '0';
-        alertDiv.style.width = '100%';
-        alertDiv.style.height = '100%';
-        alertDiv.style.backgroundColor = 'rgba(0,0,0,0.5)';
-        alertDiv.style.display = 'flex';
-        alertDiv.style.alignItems = 'center';
-        alertDiv.style.justifyContent = 'center';
-        alertDiv.style.zIndex = '9999';
-        
-        const alertContent = document.createElement('div');
-        alertContent.style.backgroundColor = 'white';
-        alertContent.style.padding = '2rem';
-        alertContent.style.borderRadius = '0.5rem';
-        alertContent.style.maxWidth = '500px';
-        alertContent.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-        alertContent.innerHTML = `
-          <div style="text-align: center;">
-            <div style="color: #e53e3e; font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
-            <h2 style="color: #2d3748; font-size: 1.5rem; margin-bottom: 1rem;">Cannot Vote</h2>
-            <p style="color: #4a5568; margin-bottom: 1.5rem;">You cannot vote on proposals you have created.</p>
-            <button style="background-color: #4299e1; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.25rem; cursor: pointer; font-weight: 500;">OK</button>
-          </div>
-        `;
-        
-        alertDiv.appendChild(alertContent);
-        document.body.appendChild(alertDiv);
-        
-        // Add event listener to close button
-        const closeButton = alertContent.querySelector('button');
-        if (closeButton) {
-          closeButton.addEventListener('click', () => {
-            document.body.removeChild(alertDiv);
-          });
-        }
-        
-        // Also close when clicking outside
-        alertDiv.addEventListener('click', (e) => {
-          if (e.target === alertDiv) {
-            document.body.removeChild(alertDiv);
-          }
-        });
-        
+        alert("Proposers cannot vote on their own proposals!");
         return;
       }
       
@@ -280,7 +392,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
       await tx.wait();
       await fetchProposals();
     } catch (error) {
-      console.error("Error voting on proposal:", error);
+      console.error("Error voting:", error);
     }
   };
 
@@ -291,32 +403,30 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
       const tx = await treasuryContract.executeProposal(proposalId);
       await tx.wait();
       await fetchProposals();
-      // Update balances after execution
-      if (account && tokenContract && treasuryContract) {
-        await fetchBalances(account, tokenContract, treasuryContract);
-      }
     } catch (error) {
       console.error("Error executing proposal:", error);
     }
   };
 
   const depositTokens = async (amount: string) => {
-    if (!tokenContract || !treasuryContract || !signer || !account) return;
+    if (!tokenContract || !treasuryContract || !signer) return;
     
     try {
-      // First approve the treasury to spend tokens
+      // First approve
       const approveTx = await tokenContract.approve(
-        await treasuryContract.getAddress(),
-        ethers.parseEther(amount)
+        treasuryContract.address,
+        ethers.utils.parseEther(amount)
       );
       await approveTx.wait();
       
       // Then deposit
-      const depositTx = await treasuryContract.deposit(ethers.parseEther(amount));
+      const depositTx = await treasuryContract.deposit(ethers.utils.parseEther(amount));
       await depositTx.wait();
       
       // Update balances
-      await fetchBalances(account, tokenContract, treasuryContract);
+      if (account) {
+        await fetchBalances(account, tokenContract, treasuryContract);
+      }
     } catch (error) {
       console.error("Error depositing tokens:", error);
     }
@@ -334,17 +444,30 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
     }
   };
 
-  // Handle account changes
+  // Effect for initial connection and account changes
   useEffect(() => {
     if (window.ethereum) {
-      window.ethereum.on('accountsChanged', async (accounts: string[]) => {
-        if (accounts.length > 0) {
-          await connectWallet();
-        } else {
+      window.ethereum.on('accountsChanged', (accounts: string[]) => {
+        if (accounts.length === 0) {
           // User disconnected their wallet
-          setIsConnected(false);
           setAccount(null);
+          setIsConnected(false);
+          setProvider(null);
+          setSigner(null);
+          setTokenContract(null);
+          setTreasuryContract(null);
+          setTokenBalance("0");
+          setTreasuryBalance("0");
+          setProposals([]);
+        } else {
+          // Account changed
+          setAccount(accounts[0]);
+          connectWallet();
         }
+      });
+
+      window.ethereum.on('chainChanged', () => {
+        window.location.reload();
       });
 
       // Check if already connected
@@ -357,52 +480,36 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
         .catch((err: any) => console.error(err));
     }
 
-    // Cleanup
     return () => {
       if (window.ethereum) {
         window.ethereum.removeAllListeners('accountsChanged');
-      }
-    };
-  }, []);
-
-  // Handle network changes
-  useEffect(() => {
-    if (window.ethereum) {
-      window.ethereum.on('chainChanged', (chainId: string) => {
-        // Reload page on network change
-        window.location.reload();
-      });
-    }
-    
-    return () => {
-      if (window.ethereum) {
         window.ethereum.removeAllListeners('chainChanged');
       }
     };
   }, []);
 
-  const value = {
-    provider,
-    signer,
-    account,
-    isConnected,
-    tokenContract,
-    treasuryContract,
-    tokenBalance,
-    treasuryBalance,
-    proposals,
-    connectWallet,
-    fetchProposals,
-    createProposal,
-    vote,
-    executeProposal,
-    depositTokens,
-    deleteProposal,
-    networkName
-  };
-
   return (
-    <BlockchainContext.Provider value={value}>
+    <BlockchainContext.Provider
+      value={{
+        provider,
+        signer,
+        account,
+        isConnected,
+        tokenContract,
+        treasuryContract,
+        tokenBalance,
+        treasuryBalance,
+        proposals,
+        connectWallet,
+        fetchProposals,
+        createProposal,
+        vote,
+        executeProposal,
+        depositTokens,
+        deleteProposal,
+        networkName,
+      }}
+    >
       {children}
     </BlockchainContext.Provider>
   );

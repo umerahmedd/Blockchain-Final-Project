@@ -11,7 +11,12 @@ const Dashboard: React.FC = () => {
     if (isConnected) {
       fetchProposals();
     }
-  }, [isConnected, fetchProposals]);
+  }, [isConnected]);
+
+  const handleRefresh = () => {
+    console.log("Manual refresh clicked");
+    fetchProposals();
+  };
 
   if (!isConnected) {
     return (
@@ -44,7 +49,15 @@ const Dashboard: React.FC = () => {
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
         <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4">Treasury Overview</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-gray-800">Treasury Overview</h2>
+            <button 
+              onClick={handleRefresh}
+              className="px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
+            >
+              Refresh Data
+            </button>
+          </div>
           <div className="bg-blue-50 rounded-lg p-4 flex items-center justify-between">
             <div>
               <p className="text-gray-600 text-sm">Total Treasury Funds</p>

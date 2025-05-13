@@ -1,0 +1,2 @@
+npx hardhat run scripts/transferTokens.js --network localhost
+q
