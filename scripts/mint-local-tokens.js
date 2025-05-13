@@ -4,10 +4,10 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Minting tokens with account:", deployer.address);
   
-  // Get recipient address from environment variable
-  const recipient = process.env.RECIPIENT_ADDRESS;
-  if (!recipient || !ethers.isAddress(recipient)) {
-    console.error("Please provide a valid recipient address");
+  // Get recipient address from environment variable or use MetaMask default
+  const recipient = process.env.RECIPIENT_ADDRESS || "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+  if (!ethers.isAddress(recipient)) {
+    console.error("Invalid recipient address");
     process.exit(1);
   }
 

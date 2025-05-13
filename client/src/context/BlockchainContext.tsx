@@ -1,0 +1,409 @@
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { ethers, BrowserProvider, Contract } from 'ethers';
+import MyTokenABI from '../contracts/MyToken.json';
+import DAOTreasuryABI from '../contracts/DAOTreasury.json';
+import deploymentInfo from '../contracts/deployment.json';
+
+// Network configuration
+const LOCAL_CHAIN_ID = '0x7a69';     // Hex for 31337 (Hardhat's default chainId)
+
+interface BlockchainContextType {
+  provider: BrowserProvider | null;
+  signer: any | null;
+  account: string | null;
+  isConnected: boolean;
+  tokenContract: Contract | null;
+  treasuryContract: Contract | null;
+  tokenBalance: string;
+  treasuryBalance: string;
+  proposals: any[];
+  connectWallet: () => Promise<void>;
+  fetchProposals: () => Promise<void>;
+  createProposal: (description: string, recipient: string, amount: string) => Promise<void>;
+  vote: (proposalId: number, support: boolean) => Promise<void>;
+  executeProposal: (proposalId: number) => Promise<void>;
+  depositTokens: (amount: string) => Promise<void>;
+  deleteProposal: (proposalId: number) => Promise<void>;
+  networkName: string;
+}
+
+const defaultContextValue: BlockchainContextType = {
+  provider: null,
+  signer: null,
+  account: null,
+  isConnected: false,
+  tokenContract: null,
+  treasuryContract: null,
+  tokenBalance: "0",
+  treasuryBalance: "0",
+  proposals: [],
+  connectWallet: async () => {},
+  fetchProposals: async () => {},
+  createProposal: async () => {},
+  vote: async () => {},
+  executeProposal: async () => {},
+  depositTokens: async () => {},
+  deleteProposal: async () => {},
+  networkName: "",
+};
+
+const BlockchainContext = createContext<BlockchainContextType>(defaultContextValue);
+
+export const useBlockchain = () => useContext(BlockchainContext);
+
+interface BlockchainProviderProps {
+  children: ReactNode;
+}
+
+export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children }) => {
+  const [provider, setProvider] = useState<BrowserProvider | null>(null);
+  const [signer, setSigner] = useState<any | null>(null);
+  const [account, setAccount] = useState<string | null>(null);
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [tokenContract, setTokenContract] = useState<Contract | null>(null);
+  const [treasuryContract, setTreasuryContract] = useState<Contract | null>(null);
+  const [tokenBalance, setTokenBalance] = useState<string>("0");
+  const [treasuryBalance, setTreasuryBalance] = useState<string>("0");
+  const [proposals, setProposals] = useState<any[]>([]);
+  const [networkName, setNetworkName] = useState<string>("");
+
+  const connectWallet = async () => {
+    if (window.ethereum) {
+      try {
+        // Request account access
+        await window.ethereum.request({ method: 'eth_requestAccounts' });
+        
+        // Get current network
+        const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+        
+        // If not on local network, ask to switch
+        if (chainId !== LOCAL_CHAIN_ID) {
+          try {
+            // Try to switch to local network
+            await window.ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: LOCAL_CHAIN_ID }],
+            });
+          } catch (switchError: any) {
+            // If local network is not added to MetaMask, add it
+            if (switchError.code === 4902) {
+              try {
+                await window.ethereum.request({
+                  method: 'wallet_addEthereumChain',
+                  params: [
+                    {
+                      chainId: LOCAL_CHAIN_ID,
+                      chainName: 'Hardhat Local',
+                      nativeCurrency: {
+                        name: 'Ethereum',
+                        symbol: 'ETH',
+                        decimals: 18,
+                      },
+                      rpcUrls: ['http://127.0.0.1:8545/'],
+                    },
+                  ],
+                });
+              } catch (addError) {
+                console.error("Failed to add local network to MetaMask", addError);
+                alert("Failed to add local network to MetaMask. Make sure your local node is running at http://127.0.0.1:8545");
+              }
+            } else {
+              console.error("Failed to switch to local network", switchError);
+              alert("Failed to switch to local network. Make sure your local node is running.");
+            }
+          }
+        }
+        
+        // Create provider and signer
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        setProvider(provider);
+        
+        // Get network information
+        const network = await provider.getNetwork();
+        setNetworkName(network.name === 'unknown' ? 'Local Network' : network.name);
+        
+        const signer = await provider.getSigner();
+        setSigner(signer);
+        
+        const account = await signer.getAddress();
+        setAccount(account);
+        setIsConnected(true);
+        
+        // Initialize contracts using deployment info
+        const tokenContract = new ethers.Contract(
+          deploymentInfo.tokenAddress,
+          MyTokenABI.abi,
+          signer
+        );
+        setTokenContract(tokenContract);
+        
+        const treasuryContract = new ethers.Contract(
+          deploymentInfo.treasuryAddress,
+          DAOTreasuryABI.abi,
+          signer
+        );
+        setTreasuryContract(treasuryContract);
+        
+        // Fetch balances
+        await fetchBalances(account, tokenContract, treasuryContract);
+        await fetchProposals();
+      } catch (error) {
+        console.error("Error connecting to wallet:", error);
+      }
+    } else {
+      alert("Please install MetaMask to use this dApp!");
+    }
+  };
+
+  const fetchBalances = async (
+    account: string, 
+    tokenContract: Contract, 
+    treasuryContract: Contract
+  ) => {
+    try {
+      const balance = await tokenContract.balanceOf(account);
+      setTokenBalance(ethers.formatEther(balance));
+      
+      const treasuryBalance = await treasuryContract.getTreasuryBalance();
+      setTreasuryBalance(ethers.formatEther(treasuryBalance));
+    } catch (error) {
+      console.error("Error fetching balances:", error);
+    }
+  };
+
+  const fetchProposals = async () => {
+    if (!treasuryContract) return;
+    
+    try {
+      const proposalCount = await treasuryContract.proposalCount();
+      const count = Number(proposalCount);
+      
+      const fetchedProposals = [];
+      for (let i = 1; i <= count; i++) {
+        const proposal = await treasuryContract.proposals(i);
+        fetchedProposals.push({
+          id: Number(proposal.id),
+          proposer: proposal.proposer,
+          description: proposal.description,
+          recipient: proposal.recipient,
+          amount: ethers.formatEther(proposal.amount),
+          startTime: Number(proposal.startTime),
+          endTime: Number(proposal.endTime),
+          forVotes: ethers.formatEther(proposal.forVotes),
+          againstVotes: ethers.formatEther(proposal.againstVotes),
+          executed: proposal.executed,
+          deleted: proposal.deleted
+        });
+      }
+      
+      setProposals(fetchedProposals);
+    } catch (error) {
+      console.error("Error fetching proposals:", error);
+    }
+  };
+
+  const createProposal = async (description: string, recipient: string, amount: string) => {
+    if (!treasuryContract || !signer) return;
+    
+    try {
+      const tx = await treasuryContract.createProposal(
+        description, 
+        recipient, 
+        ethers.parseEther(amount)
+      );
+      await tx.wait();
+      await fetchProposals();
+    } catch (error) {
+      console.error("Error creating proposal:", error);
+    }
+  };
+
+  const vote = async (proposalId: number, support: boolean) => {
+    if (!treasuryContract || !signer || !account) return;
+    
+    try {
+      // Find the proposal in our local state
+      const proposal = proposals.find(p => p.id === proposalId);
+      
+      // Check if the current account is the proposer
+      if (proposal && proposal.proposer.toLowerCase() === account.toLowerCase()) {
+        // Create a beautiful alert using a div overlay
+        const alertDiv = document.createElement('div');
+        alertDiv.style.position = 'fixed';
+        alertDiv.style.top = '0';
+        alertDiv.style.left = '0';
+        alertDiv.style.width = '100%';
+        alertDiv.style.height = '100%';
+        alertDiv.style.backgroundColor = 'rgba(0,0,0,0.5)';
+        alertDiv.style.display = 'flex';
+        alertDiv.style.alignItems = 'center';
+        alertDiv.style.justifyContent = 'center';
+        alertDiv.style.zIndex = '9999';
+        
+        const alertContent = document.createElement('div');
+        alertContent.style.backgroundColor = 'white';
+        alertContent.style.padding = '2rem';
+        alertContent.style.borderRadius = '0.5rem';
+        alertContent.style.maxWidth = '500px';
+        alertContent.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+        alertContent.innerHTML = `
+          <div style="text-align: center;">
+            <div style="color: #e53e3e; font-size: 3rem; margin-bottom: 1rem;">⚠️</div>
+            <h2 style="color: #2d3748; font-size: 1.5rem; margin-bottom: 1rem;">Cannot Vote</h2>
+            <p style="color: #4a5568; margin-bottom: 1.5rem;">You cannot vote on proposals you have created.</p>
+            <button style="background-color: #4299e1; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.25rem; cursor: pointer; font-weight: 500;">OK</button>
+          </div>
+        `;
+        
+        alertDiv.appendChild(alertContent);
+        document.body.appendChild(alertDiv);
+        
+        // Add event listener to close button
+        const closeButton = alertContent.querySelector('button');
+        if (closeButton) {
+          closeButton.addEventListener('click', () => {
+            document.body.removeChild(alertDiv);
+          });
+        }
+        
+        // Also close when clicking outside
+        alertDiv.addEventListener('click', (e) => {
+          if (e.target === alertDiv) {
+            document.body.removeChild(alertDiv);
+          }
+        });
+        
+        return;
+      }
+      
+      const tx = await treasuryContract.vote(proposalId, support);
+      await tx.wait();
+      await fetchProposals();
+    } catch (error) {
+      console.error("Error voting on proposal:", error);
+    }
+  };
+
+  const executeProposal = async (proposalId: number) => {
+    if (!treasuryContract || !signer) return;
+    
+    try {
+      const tx = await treasuryContract.executeProposal(proposalId);
+      await tx.wait();
+      await fetchProposals();
+      // Update balances after execution
+      if (account && tokenContract && treasuryContract) {
+        await fetchBalances(account, tokenContract, treasuryContract);
+      }
+    } catch (error) {
+      console.error("Error executing proposal:", error);
+    }
+  };
+
+  const depositTokens = async (amount: string) => {
+    if (!tokenContract || !treasuryContract || !signer || !account) return;
+    
+    try {
+      // First approve the treasury to spend tokens
+      const approveTx = await tokenContract.approve(
+        await treasuryContract.getAddress(),
+        ethers.parseEther(amount)
+      );
+      await approveTx.wait();
+      
+      // Then deposit
+      const depositTx = await treasuryContract.deposit(ethers.parseEther(amount));
+      await depositTx.wait();
+      
+      // Update balances
+      await fetchBalances(account, tokenContract, treasuryContract);
+    } catch (error) {
+      console.error("Error depositing tokens:", error);
+    }
+  };
+
+  const deleteProposal = async (proposalId: number) => {
+    if (!treasuryContract || !signer) return;
+    
+    try {
+      const tx = await treasuryContract.deleteProposal(proposalId);
+      await tx.wait();
+      await fetchProposals();
+    } catch (error) {
+      console.error("Error deleting proposal:", error);
+    }
+  };
+
+  // Handle account changes
+  useEffect(() => {
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', async (accounts: string[]) => {
+        if (accounts.length > 0) {
+          await connectWallet();
+        } else {
+          // User disconnected their wallet
+          setIsConnected(false);
+          setAccount(null);
+        }
+      });
+
+      // Check if already connected
+      window.ethereum.request({ method: 'eth_accounts' })
+        .then((accounts: string[]) => {
+          if (accounts.length > 0) {
+            connectWallet();
+          }
+        })
+        .catch((err: any) => console.error(err));
+    }
+
+    // Cleanup
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeAllListeners('accountsChanged');
+      }
+    };
+  }, []);
+
+  // Handle network changes
+  useEffect(() => {
+    if (window.ethereum) {
+      window.ethereum.on('chainChanged', (chainId: string) => {
+        // Reload page on network change
+        window.location.reload();
+      });
+    }
+    
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeAllListeners('chainChanged');
+      }
+    };
+  }, []);
+
+  const value = {
+    provider,
+    signer,
+    account,
+    isConnected,
+    tokenContract,
+    treasuryContract,
+    tokenBalance,
+    treasuryBalance,
+    proposals,
+    connectWallet,
+    fetchProposals,
+    createProposal,
+    vote,
+    executeProposal,
+    depositTokens,
+    deleteProposal,
+    networkName
+  };
+
+  return (
+    <BlockchainContext.Provider value={value}>
+      {children}
+    </BlockchainContext.Provider>
+  );
+}; 

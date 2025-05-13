@@ -9,8 +9,12 @@
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "save-local": "node scripts/save-local-deployment.js",
     "mint-local": "hardhat run scripts/mint-local-tokens.js --network localhost",
-    "setup-local": "npm run local-node && npm run deploy:local && npm run save-local",
-    "client": "cd client && npm start"
+    "setup-local": "npm run deploy:local && npm run save-local && npm run sync-time",
+    "client": "cd client && npm start",
+    "fastforward": "hardhat run scripts/fast-forward-blocks.js --network localhost",
+    "end-voting": "hardhat run scripts/end-voting-period.js --network localhost",
+    "advance-time": "node scripts/time-advance-wrapper.js",
+    "sync-time": "hardhat run scripts/set-current-time.js --network localhost"
   },
   "keywords": [],
   "author": "",
