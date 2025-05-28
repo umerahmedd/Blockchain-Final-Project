@@ -24,7 +24,10 @@ contract DAOTreasury is Ownable {
     }
 
     mapping(uint256 => Proposal) public proposals;
-    uint256 public constant MINIMUM_TOKENS = 1000 * 10 ** 18; // 1000 tokens
+    mapping(address => uint256) public userDeposits; // Track individual user deposits
+    
+    uint256 public constant MINIMUM_TOKENS = 1000 * 10 ** 18; // 1000 tokens for voting
+    uint256 public constant MINIMUM_DEPOSIT_FOR_PROPOSAL = 5000 * 10 ** 18; // 5000 tokens deposited to create proposals
     uint256 public constant VOTING_PERIOD = 7 days; // 7 days in seconds
 
     event Deposited(address indexed sender, uint256 amount);
@@ -40,13 +43,26 @@ contract DAOTreasury is Ownable {
     function deposit(uint256 amount) external {
         require(amount > 0, "Amount must be greater than 0");
         require(token.transferFrom(msg.sender, address(this), amount), "Transfer failed");
+        
+        // Track user's total deposits
+        userDeposits[msg.sender] += amount;
+        
         emit Deposited(msg.sender, amount);
     }
 
     function createProposal(string memory description, address recipient, uint256 amount) external {
-        require(token.balanceOf(msg.sender) >= MINIMUM_TOKENS, "Insufficient tokens to propose");
+        createProposal(description, recipient, amount, 7 * 24 * 60); // 7 days in minutes
+    }
+
+    function createProposal(string memory description, address recipient, uint256 amount, uint256 votingDurationMinutes) public {
+        require(token.balanceOf(msg.sender) >= MINIMUM_TOKENS, "Insufficient tokens to vote");
+        require(userDeposits[msg.sender] >= MINIMUM_DEPOSIT_FOR_PROPOSAL, "Must deposit at least 5000 DTK to create proposals");
         require(amount > 0, "Amount must be greater than 0");
         require(recipient != address(0), "Invalid recipient");
+        require(votingDurationMinutes > 0, "Voting duration must be greater than 0");
+
+        // Convert minutes to seconds
+        uint256 votingDurationSeconds = votingDurationMinutes * 60;
 
         proposalCount++;
         Proposal storage proposal = proposals[proposalCount];
@@ -56,7 +72,7 @@ contract DAOTreasury is Ownable {
         proposal.recipient = recipient;
         proposal.amount = amount;
         proposal.startTime = block.timestamp;
-        proposal.endTime = block.timestamp + VOTING_PERIOD;
+        proposal.endTime = block.timestamp + votingDurationSeconds;
         proposal.executed = false;
         proposal.deleted = false;
 
@@ -112,5 +128,13 @@ contract DAOTreasury is Ownable {
 
     function getTreasuryBalance() external view returns (uint256) {
         return token.balanceOf(address(this));
+    }
+
+    function getUserDeposits(address user) external view returns (uint256) {
+        return userDeposits[user];
+    }
+
+    function getMinimumDepositForProposal() external pure returns (uint256) {
+        return MINIMUM_DEPOSIT_FOR_PROPOSAL;
     }
 }

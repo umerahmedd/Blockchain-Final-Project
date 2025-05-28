@@ -16,10 +16,11 @@ interface BlockchainContextType {
   treasuryContract: ethers.Contract | null;
   tokenBalance: string;
   treasuryBalance: string;
+  userDeposits: string;
   proposals: any[];
   connectWallet: () => Promise<void>;
   fetchProposals: () => Promise<void>;
-  createProposal: (description: string, recipient: string, amount: string) => Promise<void>;
+  createProposal: (description: string, recipient: string, amount: string, durationMinutes?: number) => Promise<void>;
   vote: (proposalId: number, support: boolean) => Promise<void>;
   executeProposal: (proposalId: number) => Promise<void>;
   depositTokens: (amount: string) => Promise<void>;
@@ -36,6 +37,7 @@ const defaultContextValue: BlockchainContextType = {
   treasuryContract: null,
   tokenBalance: "0",
   treasuryBalance: "0",
+  userDeposits: "0",
   proposals: [],
   connectWallet: async () => {},
   fetchProposals: async () => {},
@@ -64,6 +66,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
   const [treasuryContract, setTreasuryContract] = useState<ethers.Contract | null>(null);
   const [tokenBalance, setTokenBalance] = useState<string>("0");
   const [treasuryBalance, setTreasuryBalance] = useState<string>("0");
+  const [userDeposits, setUserDeposits] = useState<string>("0");
   const [proposals, setProposals] = useState<any[]>([]);
   const [networkName, setNetworkName] = useState<string>("");
   const [isFetching, setIsFetching] = useState<boolean>(false);
@@ -181,17 +184,45 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
     treasuryContract: ethers.Contract
   ) => {
     try {
+      console.log("=== FETCHING BALANCES ===");
       console.log("Fetching balance for account:", account);
+      console.log("Token contract address:", tokenContract.address);
+      console.log("Treasury contract address:", treasuryContract.address);
+      
       const balance = await tokenContract.balanceOf(account);
-      console.log("Raw token balance:", balance.toString());
-      setTokenBalance(ethers.utils.formatEther(balance));
+      console.log("Raw token balance (BigNumber):", balance);
+      console.log("Raw token balance (string):", balance.toString());
+      
+      const formattedBalance = ethers.utils.formatEther(balance);
+      console.log("Formatted token balance:", formattedBalance);
+      setTokenBalance(formattedBalance);
+      console.log("Token balance set in state:", formattedBalance);
       
       console.log("Fetching treasury balance");
       const treasuryBalance = await treasuryContract.getTreasuryBalance();
-      console.log("Raw treasury balance:", treasuryBalance.toString());
-      setTreasuryBalance(ethers.utils.formatEther(treasuryBalance));
-    } catch (error) {
+      console.log("Raw treasury balance (BigNumber):", treasuryBalance);
+      console.log("Raw treasury balance (string):", treasuryBalance.toString());
+      
+      const formattedTreasuryBalance = ethers.utils.formatEther(treasuryBalance);
+      console.log("Formatted treasury balance:", formattedTreasuryBalance);
+      setTreasuryBalance(formattedTreasuryBalance);
+      console.log("Treasury balance set in state:", formattedTreasuryBalance);
+      
+      console.log("Fetching user deposits");
+      const userDepositsAmount = await treasuryContract.getUserDeposits(account);
+      console.log("Raw user deposits (BigNumber):", userDepositsAmount);
+      console.log("Raw user deposits (string):", userDepositsAmount.toString());
+      
+      const formattedUserDeposits = ethers.utils.formatEther(userDepositsAmount);
+      console.log("Formatted user deposits:", formattedUserDeposits);
+      setUserDeposits(formattedUserDeposits);
+      console.log("User deposits set in state:", formattedUserDeposits);
+      
+      console.log("=== BALANCE FETCHING COMPLETE ===");
+    } catch (error: any) {
       console.error("Error fetching balances:", error);
+      console.error("Error details:", error.message);
+      console.error("Error stack:", error.stack);
     }
   };
 
@@ -359,19 +390,39 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
     setProposalFetchTimer(newTimer);
   };
 
-  const createProposal = async (description: string, recipient: string, amount: string) => {
+  const createProposal = async (description: string, recipient: string, amount: string, durationMinutes?: number) => {
     if (!treasuryContract || !signer) return;
     
     try {
-      const tx = await treasuryContract.createProposal(
+      // Check if user has deposited at least 5000 DTK
+      const userDepositsAmount = await treasuryContract.getUserDeposits(account);
+      const minimumDeposit = await treasuryContract.getMinimumDepositForProposal();
+      
+      if (userDepositsAmount.lt(minimumDeposit)) {
+        const requiredAmount = ethers.utils.formatEther(minimumDeposit);
+        const currentAmount = ethers.utils.formatEther(userDepositsAmount);
+        throw new Error(`INSUFFICIENT_DEPOSITS:You need to deposit at least ${requiredAmount} DTK to create proposals. You have deposited ${currentAmount} DTK.`);
+      }
+      
+      // Always use the 4-parameter version, default to 7 days (10080 minutes) if not specified
+      const duration = durationMinutes || 10080; // 7 days in minutes
+      
+      console.log("Creating proposal with duration:", duration, "minutes");
+      console.log("Available functions:", Object.keys(treasuryContract.functions));
+      
+      // Use the specific function selector for the 4-parameter version
+      const tx = await treasuryContract['createProposal(string,address,uint256,uint256)'](
         description, 
         recipient, 
-        ethers.utils.parseEther(amount)
+        ethers.utils.parseEther(amount),
+        duration
       );
+      
       await tx.wait();
       await fetchProposals();
     } catch (error) {
       console.error("Error creating proposal:", error);
+      throw error; // Re-throw to let the UI handle it
     }
   };
 
@@ -458,6 +509,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
           setTreasuryContract(null);
           setTokenBalance("0");
           setTreasuryBalance("0");
+          setUserDeposits("0");
           setProposals([]);
         } else {
           // Account changed
@@ -499,6 +551,7 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
         treasuryContract,
         tokenBalance,
         treasuryBalance,
+        userDeposits,
         proposals,
         connectWallet,
         fetchProposals,
