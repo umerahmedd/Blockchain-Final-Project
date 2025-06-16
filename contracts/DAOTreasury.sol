@@ -35,6 +35,7 @@ contract DAOTreasury is Ownable {
     event Voted(uint256 indexed proposalId, address voter, bool support, uint256 weight);
     event ProposalExecuted(uint256 indexed proposalId, address recipient, uint256 amount);
     event ProposalDeleted(uint256 indexed proposalId);
+    event Withdrawn(address indexed user, uint256 amount);
 
     constructor(address _token) Ownable(msg.sender) {
         token = IERC20(_token);
@@ -48,6 +49,73 @@ contract DAOTreasury is Ownable {
         userDeposits[msg.sender] += amount;
         
         emit Deposited(msg.sender, amount);
+    }
+
+    function withdraw(uint256 amount) external {
+        require(amount > 0, "Amount must be greater than 0");
+        require(userDeposits[msg.sender] >= amount, "Insufficient deposit balance");
+        
+        // Check if user has any active proposals they created
+        require(!hasActiveProposals(msg.sender), "Cannot withdraw while having active proposals");
+        
+        // Ensure withdrawal doesn't violate minimum deposit requirement for existing proposals
+        uint256 remainingDeposit = userDeposits[msg.sender] - amount;
+        if (hasCreatedAnyProposal(msg.sender)) {
+            require(remainingDeposit >= MINIMUM_DEPOSIT_FOR_PROPOSAL, 
+                "Withdrawal would violate minimum deposit requirement for proposal creation");
+        }
+        
+        // Update user's deposit balance
+        userDeposits[msg.sender] -= amount;
+        
+        // Transfer tokens back to user
+        require(token.transfer(msg.sender, amount), "Transfer failed");
+        
+        emit Withdrawn(msg.sender, amount);
+    }
+
+    function hasActiveProposals(address user) public view returns (bool) {
+        for (uint256 i = 1; i <= proposalCount; i++) {
+            Proposal storage proposal = proposals[i];
+            if (proposal.proposer == user && 
+                !proposal.executed && 
+                !proposal.deleted && 
+                block.timestamp <= proposal.endTime) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function hasCreatedAnyProposal(address user) public view returns (bool) {
+        for (uint256 i = 1; i <= proposalCount; i++) {
+            Proposal storage proposal = proposals[i];
+            if (proposal.proposer == user && !proposal.deleted) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function getWithdrawableAmount(address user) external view returns (uint256) {
+        uint256 totalDeposit = userDeposits[user];
+        
+        // If user has active proposals, they cannot withdraw anything
+        if (hasActiveProposals(user)) {
+            return 0;
+        }
+        
+        // If user has created any proposals (even executed ones), 
+        // they must maintain minimum deposit
+        if (hasCreatedAnyProposal(user)) {
+            if (totalDeposit <= MINIMUM_DEPOSIT_FOR_PROPOSAL) {
+                return 0;
+            }
+            return totalDeposit - MINIMUM_DEPOSIT_FOR_PROPOSAL;
+        }
+        
+        // If user never created proposals, they can withdraw everything
+        return totalDeposit;
     }
 
     function createProposal(string memory description, address recipient, uint256 amount) external {

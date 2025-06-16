@@ -24,6 +24,9 @@ interface BlockchainContextType {
   vote: (proposalId: number, support: boolean) => Promise<void>;
   executeProposal: (proposalId: number) => Promise<void>;
   depositTokens: (amount: string) => Promise<void>;
+  withdrawTokens: (amount: string) => Promise<void>;
+  getWithdrawableAmount: () => Promise<string>;
+  hasActiveProposals: () => Promise<boolean>;
   deleteProposal: (proposalId: number) => Promise<void>;
   networkName: string;
 }
@@ -45,6 +48,9 @@ const defaultContextValue: BlockchainContextType = {
   vote: async () => {},
   executeProposal: async () => {},
   depositTokens: async () => {},
+  withdrawTokens: async () => {},
+  getWithdrawableAmount: async () => "0",
+  hasActiveProposals: async () => false,
   deleteProposal: async () => {},
   networkName: "",
 };
@@ -483,6 +489,47 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
     }
   };
 
+  const withdrawTokens = async (amount: string) => {
+    if (!treasuryContract || !signer || !account) return;
+    
+    try {
+      const tx = await treasuryContract.withdraw(ethers.utils.parseEther(amount));
+      await tx.wait();
+      
+      // Update balances
+      if (account && tokenContract && treasuryContract) {
+        await fetchBalances(account, tokenContract, treasuryContract);
+      }
+    } catch (error) {
+      console.error("Error withdrawing tokens:", error);
+      throw error; // Re-throw to let the UI handle it
+    }
+  };
+
+  const getWithdrawableAmount = async () => {
+    if (!treasuryContract || !signer || !account) return "0";
+    
+    try {
+      const amount = await treasuryContract.getWithdrawableAmount(account);
+      return ethers.utils.formatEther(amount);
+    } catch (error) {
+      console.error("Error getting withdrawable amount:", error);
+      return "0";
+    }
+  };
+
+  const hasActiveProposals = async () => {
+    if (!treasuryContract || !signer || !account) return false;
+    
+    try {
+      const hasActive = await treasuryContract.hasActiveProposals(account);
+      return hasActive;
+    } catch (error) {
+      console.error("Error checking active proposals:", error);
+      return false;
+    }
+  };
+
   const deleteProposal = async (proposalId: number) => {
     if (!treasuryContract || !signer) return;
     
@@ -559,6 +606,9 @@ export const BlockchainProvider: React.FC<BlockchainProviderProps> = ({ children
         vote,
         executeProposal,
         depositTokens,
+        withdrawTokens,
+        getWithdrawableAmount,
+        hasActiveProposals,
         deleteProposal,
         networkName,
       }}

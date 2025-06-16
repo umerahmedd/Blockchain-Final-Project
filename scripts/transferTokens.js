@@ -5,7 +5,7 @@ async function main() {
   const [owner] = await ethers.getSigners();
   
   // Get the token contract
-  const tokenAddress = "0xc6e7DF5E7b4f2A278906862b61205850344D4e7d"; // Updated token address from deployment
+  const tokenAddress = "0x9E545E3C0baAB3E08CdfD552C960A1050f373042"; // Updated token address from deployment
   const MyToken = await ethers.getContractFactory("MyToken");
   const token = await MyToken.attach(tokenAddress);
 

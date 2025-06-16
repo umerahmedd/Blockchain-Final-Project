@@ -3,6 +3,7 @@ import { useBlockchain } from '../context/BlockchainContext';
 import ProposalList from './ProposalList';
 import CreateProposal from './CreateProposal';
 import DepositForm from './DepositForm';
+import WithdrawForm from './WithdrawForm';
 
 const Dashboard: React.FC = () => {
   const { isConnected, treasuryBalance, fetchProposals, tokenBalance, account, userDeposits } = useBlockchain();
@@ -121,6 +122,11 @@ const Dashboard: React.FC = () => {
         <div className="bg-white rounded-lg shadow p-6 mb-6">
           <h2 className="text-xl font-bold text-gray-800 mb-4">Deposit Tokens</h2>
           <DepositForm />
+        </div>
+        
+        <div className="bg-white rounded-lg shadow p-6 mb-6">
+          <h2 className="text-xl font-bold text-gray-800 mb-4">Withdraw Tokens</h2>
+          <WithdrawForm />
         </div>
         
         <div className="bg-white rounded-lg shadow p-6">
